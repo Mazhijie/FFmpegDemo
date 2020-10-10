@@ -45,8 +45,9 @@ target_link_libraries( # Specifies the target library.
                        native-lib
 
                        -Wl,--start-group
-                       avcodec avdevice avfilter avformat avutil swresample swscale
+                       avcodec avfilter avformat avutil swresample swscale
                        -Wl,--end-group
+                       android
 
                        # Links the target library to the log library
                        # included in the NDK.
