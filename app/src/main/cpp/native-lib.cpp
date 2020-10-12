@@ -2,7 +2,9 @@
 #include <string>
 #include <android/log.h>
 
+
 extern "C" {
+#include <libswresample/swresample.h>
 //编码
 #include "libavcodec/avcodec.h"
 //封装格式处理
@@ -147,5 +149,98 @@ Java_com_ziky_ffmpegJni_FFmpegUtils_play(JNIEnv *env, jclass clazz, jstring path
     av_frame_free(&rgb_frame);
     avcodec_close(avCodecContext);
     avformat_free_context(avFormatContext);
+    env->ReleaseStringUTFChars(path, inputPath);
+}extern "C"
+JNIEXPORT void JNICALL
+Java_com_ziky_ffmpegJni_FFmpegUtils_playSound(JNIEnv *env, jclass clazz, jstring path) {
+
+    const char *inputPath = env->GetStringUTFChars(path, JNI_FALSE);
+    LOGD("path = %s", inputPath);
+
+    av_register_all();
+    AVFormatContext *pFormatCtx = avformat_alloc_context();
+
+    //open
+    if (avformat_open_input(&pFormatCtx, inputPath, NULL, NULL) < 0) {
+        LOGE("打开输入视频文件失败");
+        return;
+    }
+    //获取视频信息
+    if (avformat_find_stream_info(pFormatCtx, NULL) < 0) {
+        LOGE("获取视频信息失败");
+        return;
+    }
+    int audio_stream_index = -1;
+    for (int i = 0; i < pFormatCtx->nb_streams; ++i) {
+        if (pFormatCtx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO) {
+            LOGE("找到音频id %d", pFormatCtx->streams[i]->codec->codec_type);
+            audio_stream_index = i;
+            break;
+        }
+    }
+
+    //获取解码器上下文
+    AVCodecContext *pCodecCtx = pFormatCtx->streams[audio_stream_index]->codec;
+    //获取解码器
+    AVCodec *pCodec = avcodec_find_decoder(pCodecCtx->codec_id);
+    //打开解码器
+    if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0) {
+        LOGE("打开解码器失败");
+        return;
+    }
+    //申请avpacket，装解码前的数据
+    AVPacket *packet = (AVPacket *) av_malloc(sizeof(AVPacket));
+    //申请avframe,装解码后的数据
+    AVFrame *frame = av_frame_alloc();
+
+    //得到SwrContext,进行重采样
+    SwrContext *swrContext = swr_alloc();
+    //缓冲区
+    uint8_t *out_buffer = (uint8_t *) av_malloc(44100 * 2);
+    //输出的声道布局(立体声)
+    uint64_t out_ch_layout = AV_CH_LAYOUT_STEREO;
+    //输出采样位数 16位
+    enum AVSampleFormat out_format = AV_SAMPLE_FMT_S16;
+    //输出的采样率必须与输入相同
+    int out_sample_rate = pCodecCtx->sample_rate;
+    //swr_alloc_set_opts将PCM源文件的采样格式转换为自己希望的采样格式
+    swr_alloc_set_opts(swrContext, out_ch_layout, out_format, out_sample_rate,
+                       pCodecCtx->channel_layout, pCodecCtx->sample_fmt, pCodecCtx->sample_rate, 0,
+                       NULL);
+    swr_init(swrContext);
+    //获取通道数 2
+    int out_channer_nb = av_get_channel_layout_nb_channels(AV_CH_LAYOUT_STEREO);
+    //反射得到class类型
+//      jclass player = env->GetObjectClass(clazz);
+    jclass player = env->FindClass("com/ziky/ffmpegJni/FFmpegUtils");
+    //反射得到createAudio方法
+    jmethodID createAudio = env->GetStaticMethodID(player, "createTrack", "(II)V");
+    //反射调用createAudio
+    env->CallStaticVoidMethod(player, createAudio, 44100, out_ch_layout);
+    jmethodID audio_write = env->GetStaticMethodID(player, "playTrack", "([BI)V");
+
+    int got_frame;
+    while (av_read_frame(pFormatCtx, packet) >= 0) {
+        if (packet->stream_index == audio_stream_index) {
+            //解码MP3 编码格式frame---pcm frame
+            avcodec_decode_audio4(pCodecCtx, frame, &got_frame, packet);
+            if (got_frame) {
+                LOGE("解码");
+                swr_convert(swrContext, &out_buffer, 44100 * 2, (const uint8_t **) frame->data,
+                            frame->nb_samples);
+                //缓冲区的大小
+                int size = av_samples_get_buffer_size(NULL, out_channer_nb, frame->nb_samples,
+                                                      AV_SAMPLE_FMT_S16, 1);
+                jbyteArray audio_sample_array = env->NewByteArray(size);
+                env->SetByteArrayRegion(audio_sample_array, 0, size, (const jbyte *) out_buffer);
+                env->CallStaticVoidMethod(player, audio_write, audio_sample_array, size);
+                env->DeleteLocalRef(audio_sample_array);
+            }
+        }
+    }
+    av_frame_free(&frame);
+    swr_free(&swrContext);
+    avcodec_close(pCodecCtx);
+    avformat_close_input(&pFormatCtx);
     env->ReleaseStringUTFChars(path, inputPath);
 }

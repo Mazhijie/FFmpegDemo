@@ -42,6 +42,12 @@ public class MainActivity extends AppCompatActivity {
                 }).start();
             }
         });
+        findViewById(R.id.btn_play_sound).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                FFmpegUtils.playSound(path);
+            }
+        });
     }
 
 
